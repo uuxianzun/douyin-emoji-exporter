@@ -1,0 +1,843 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>抖音表情包导出工具</title>
+<style>
+  :root {
+    /* 亮色 + 优雅绿主题 */
+    --bg: #f4f8f5;
+    --bg-grad: linear-gradient(170deg, #f2f9f4 0%, #eaf4ee 55%, #e6f2ec 100%);
+    --panel: #ffffff;
+    --panel2: #f3f8f4;
+    --panel3: #e9f3ec;
+    --border: #d8e6dd;
+    --border-soft: #e6f0ea;
+    --text: #1f2d26;
+    --text-soft: #47584f;
+    --muted: #6b7d74;
+    --accent: #2f9e6e;
+    --accent-hi: #37b37c;
+    --accent-dim: #cfe9dc;
+    --accent-ink: #1c7a52;
+    --ok: #2f9e6e;
+    --warn: #c98a1b;
+    --danger: #cf5b52;
+    --sel: #2f9e6e;
+    --shadow: 0 1px 2px rgba(31,45,38,.04), 0 4px 14px rgba(31,45,38,.05);
+    --shadow-hi: 0 2px 5px rgba(47,158,110,.16), 0 8px 22px rgba(47,158,110,.10);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg); background-image: var(--bg-grad);
+    background-attachment: fixed;
+    color: var(--text);
+    font: 14px/1.6 -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+    min-height: 100vh; padding: 22px;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1240px; margin: 0 auto; }
+
+  header { display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 20px; flex-wrap: wrap; gap: 12px; }
+  .brand { display: flex; align-items: center; gap: 11px; flex-wrap: wrap; }
+  h1 { font-size: 19px; font-weight: 650; display: flex; align-items: center;
+    gap: 9px; letter-spacing: .2px; }
+  h1 .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--accent);
+    box-shadow: 0 0 0 4px rgba(47,158,110,.14); }
+  .sub { color: var(--muted); font-size: 13px; margin-top: 4px; }
+
+  /* 顶部"操作窗口"标签 */
+  .win-tag { display: inline-flex; align-items: center; gap: 6px;
+    background: var(--accent); color: #fff; font-size: 11.5px; font-weight: 600;
+    padding: 5px 12px; border-radius: 20px; letter-spacing: .4px;
+    box-shadow: 0 2px 8px rgba(47,158,110,.28); white-space: nowrap; }
+  .win-tag .pulse { width: 6px; height: 6px; border-radius: 50%; background: #fff;
+    animation: pulse 1.8s ease-in-out infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
+
+  /* 视频教程链接 */
+  .tutorial { display: inline-flex; align-items: center; gap: 5px;
+    font-size: 12px; font-weight: 600; color: var(--accent-ink);
+    background: var(--panel); border: 1px solid #bfe3cd;
+    padding: 5px 11px; border-radius: 20px; text-decoration: none;
+    transition: .16s; white-space: nowrap; }
+  .tutorial svg { width: 14px; height: 14px; fill: #00a1d6; flex: none; }
+  .tutorial .arrow { font-size: 11px; opacity: .65; }
+  .tutorial:hover { background: #eef9f2; border-color: var(--accent);
+    color: var(--accent); box-shadow: 0 2px 8px rgba(47,158,110,.16); }
+  .tutorial:hover .arrow { opacity: 1; }
+
+  .card { background: var(--panel); border: 1px solid var(--border-soft);
+    border-radius: 14px; padding: 16px; margin-bottom: 16px;
+    box-shadow: var(--shadow); }
+
+  button { background: var(--panel); color: var(--text-soft);
+    border: 1px solid var(--border); border-radius: 9px; padding: 8px 15px;
+    font-size: 13px; cursor: pointer; font-family: inherit;
+    transition: .16s; font-weight: 500; }
+  button:hover:not(:disabled) { background: var(--panel3);
+    border-color: var(--accent-dim); color: var(--accent-ink); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  button.primary { background: var(--accent); border-color: var(--accent);
+    color: #fff; }
+  button.primary:hover:not(:disabled) { background: var(--accent-hi);
+    border-color: var(--accent-hi); color: #fff; box-shadow: var(--shadow-hi); }
+  button.ghost { background: transparent; border-color: transparent; }
+  button.ghost:hover:not(:disabled) { background: var(--panel3); }
+
+  .toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    padding: 13px 16px; }
+  .spacer { flex: 1; }
+  .cnt { color: var(--muted); font-size: 13px; }
+  .cnt b { color: var(--accent-ink); font-weight: 650; }
+
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(108px, 1fr));
+    gap: 11px; padding: 16px; min-height: 190px; user-select: none; }
+  .cell { position: relative; aspect-ratio: 1; background: var(--panel2);
+    border: 2px solid var(--border-soft); border-radius: 12px; overflow: hidden;
+    cursor: pointer; transition: .14s; display: flex;
+    align-items: center; justify-content: center; }
+  .cell:hover { border-color: var(--accent-dim); transform: translateY(-2px);
+    box-shadow: var(--shadow); }
+  .cell img { width: 100%; height: 100%; object-fit: contain; pointer-events: none; }
+  .cell.picked { border-color: var(--sel); background: #e8f6ee;
+    box-shadow: 0 0 0 3px rgba(47,158,110,.12); }
+  .cell.old { opacity: .5; }
+  .cell .check { position: absolute; top: 5px; right: 5px; width: 19px; height: 19px;
+    border-radius: 50%; background: var(--sel); color: #fff; font-size: 12px;
+    display: none; align-items: center; justify-content: center; font-weight: 700;
+    box-shadow: 0 1px 4px rgba(0,0,0,.2); }
+  .cell.picked .check { display: flex; }
+  .cell .tag { position: absolute; bottom: 0; left: 0; right: 0; font-size: 10px;
+    text-align: center; background: rgba(31,45,38,.72); color: #ffe0a3;
+    padding: 2px; display: none; }
+  .cell.old .tag { display: block; }
+
+  footer { margin-top: 6px; padding: 6px 2px 12px; display: flex; align-items: center;
+    justify-content: space-between; flex-wrap: wrap; gap: 8px;
+    color: var(--muted); font-size: 12px; }
+  footer .author { display: flex; align-items: center; gap: 7px; }
+  footer .author b { color: var(--text); font-weight: 650; }
+  footer a { color: var(--accent-ink); text-decoration: none;
+    display: inline-flex; align-items: center; gap: 4px;
+    border-bottom: 1px dashed transparent; transition: .15s; }
+  footer a:hover { border-bottom-color: var(--accent); color: var(--accent); }
+  footer a svg { width: 14px; height: 14px; fill: currentColor; flex: none; }
+  footer .tip { opacity: .75; }
+
+  .empty { text-align: center; color: var(--muted); padding: 66px 20px; font-size: 13px; }
+  .empty .big { font-size: 30px; margin-bottom: 10px; opacity: .55; }
+
+  .bar { height: 6px; background: var(--panel3); border-radius: 3px; overflow: hidden; }
+  .bar > i { display: block; height: 100%; width: 0%; background: var(--accent);
+    transition: width .2s; }
+
+  .toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%) translateY(80px);
+    background: #fff; border: 1px solid var(--border); border-radius: 10px;
+    padding: 12px 20px; font-size: 13px; color: var(--text-soft); opacity: 0;
+    transition: .25s; z-index: 999; pointer-events: none; max-width: 90vw;
+    box-shadow: 0 6px 24px rgba(31,45,38,.14); }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  .toast.err { border-color: #eec3bf; background: #fdf3f2; color: var(--danger); }
+  .toast.ok { border-color: #bfe3cd; background: #f1faf4; color: var(--accent-ink); }
+
+  .marquee { position: fixed; border: 1.5px solid var(--sel);
+    background: rgba(47,158,110,.12); border-radius: 6px; pointer-events: none;
+    z-index: 900; display: none; }
+
+  /* ---------- 弹窗 ---------- */
+  .overlay { position: fixed; inset: 0; background: rgba(24,38,31,.42);
+    backdrop-filter: blur(3px); z-index: 1000; display: flex;
+    align-items: center; justify-content: center; padding: 20px;
+    opacity: 0; pointer-events: none; transition: .2s; }
+  .overlay.show { opacity: 1; pointer-events: auto; }
+  .modal { background: #fff; border-radius: 16px; padding: 26px 26px 22px;
+    max-width: 520px; width: 100%; box-shadow: 0 20px 60px rgba(24,38,31,.24);
+    transform: translateY(14px) scale(.97); transition: .24s cubic-bezier(.2,.9,.3,1.1); }
+  .overlay.show .modal { transform: translateY(0) scale(1); }
+  .modal .mstep { display: inline-flex; align-items: center; gap: 6px;
+    font-size: 11.5px; font-weight: 700; color: var(--accent);
+    background: #eef9f2; border: 1px solid #bfe3cd;
+    padding: 3px 10px; border-radius: 20px; margin-bottom: 12px; }
+  .modal h3 { font-size: 18px; font-weight: 650; margin-bottom: 10px;
+    display: flex; align-items: center; gap: 8px; }
+  .modal .mtext { font-size: 13.5px; color: var(--text-soft); line-height: 1.85; }
+  .modal .mtext b { color: var(--accent-ink); font-weight: 700; }
+  .modal .mtext em { font-style: normal; color: var(--warn); font-weight: 700; }
+  .modal .mnote { margin-top: 14px; background: var(--panel2);
+    border-left: 3px solid var(--accent); border-radius: 8px;
+    padding: 11px 14px; font-size: 12.5px; color: var(--muted);
+    line-height: 1.85; }
+  .modal .mnote b { color: var(--text); }
+  .modal .macts { display: flex; gap: 10px; margin-top: 20px;
+    justify-content: flex-end; flex-wrap: wrap; }
+  .modal .macts button { padding: 9px 20px; font-size: 13.5px; }
+  .modal .macts .wide { flex: 1; display: block; text-align: left;
+    padding: 13px 16px; font-size: 13px; line-height: 1.6;
+    color: var(--text-soft); font-weight: 500; }
+  .modal .macts .wide b { color: var(--accent-ink); font-weight: 700; }
+  .modal .macts.col { flex-direction: column; align-items: stretch; }
+  .modal .macts.col button.wide { width: 100%; }
+
+  .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .status-pill { font-size: 12px; padding: 4px 11px; border-radius: 20px;
+    background: var(--panel2); border: 1px solid var(--border); color: var(--muted); }
+  .status-pill.on { color: var(--accent-ink); border-color: #bfe3cd;
+    background: #eef9f2; }
+  .hint { font-size: 12px; color: var(--muted); }
+
+  /* ---------- 大号步骤指示 ---------- */
+  .guide { display: flex; gap: 10px; flex-wrap: wrap; }
+  .gstep { flex: 1; min-width: 210px; background: var(--panel2);
+    border: 1px solid var(--border-soft);
+    border-left: 3px solid var(--border); border-radius: 11px;
+    padding: 14px 16px; transition: .22s; }
+  .gstep.active { border-left-color: var(--accent); background: #eaf7f0;
+    box-shadow: 0 0 0 1px rgba(47,158,110,.14); }
+  .gstep.done { border-left-color: var(--ok); opacity: .8; }
+  .gstep .gt { font-weight: 650; font-size: 14px; display: flex;
+    align-items: center; gap: 8px; }
+  .gstep .gn { display: inline-flex; width: 22px; height: 22px; border-radius: 50%;
+    background: var(--muted); color: #fff; font-size: 12px; align-items: center;
+    justify-content: center; font-weight: 700; flex: none; }
+  .gstep.done .gn { background: var(--ok); }
+  .gstep.active .gn { background: var(--accent);
+    box-shadow: 0 0 0 3px rgba(47,158,110,.16); }
+  .gstep .gd { color: var(--muted); font-size: 12.5px; margin-top: 6px;
+    line-height: 1.75; }
+  .gstep .gd b { color: var(--warn); }
+  .gstep .gd em { color: var(--accent-ink); font-style: normal; font-weight: 650; }
+
+  /* ---------- FAQ ---------- */
+  details.faq { border: 1px solid var(--border-soft); border-radius: 11px;
+    margin-bottom: 8px; background: var(--panel); overflow: hidden;
+    transition: .16s; }
+  details.faq[open] { box-shadow: var(--shadow); }
+  details.faq summary { cursor: pointer; padding: 12px 15px; font-size: 13px;
+    font-weight: 550; color: var(--text-soft); list-style: none;
+    display: flex; align-items: center; gap: 8px; transition: .15s; }
+  details.faq summary::-webkit-details-marker { display: none; }
+  details.faq summary:hover { background: var(--panel2); }
+  details.faq summary::before { content: "＋"; color: var(--accent);
+    font-weight: 700; flex: none; }
+  details.faq[open] summary::before { content: "－"; }
+  details.faq .ans { padding: 0 15px 14px 37px; font-size: 12.5px;
+    color: var(--muted); line-height: 1.85; }
+  details.faq .ans b { color: var(--text); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <div class="brand">
+        <h1><span class="dot"></span>抖音表情包导出工具</h1>
+        <span class="win-tag" title="当前页面是本工具的操作窗口"><span class="pulse"></span>操作窗口</span>
+        <a class="tutorial" href="https://space.bilibili.com/30472425" target="_blank" rel="noopener noreferrer"
+           title="在哔哩哔哩观看视频教程">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17.813 4.653h.854c1.51.054 2.769.578 3.773 1.574 1.004.995 1.524 2.249 1.56 3.76v7.36c-.036 1.51-.556 2.769-1.56 3.773s-2.262 1.524-3.773 1.56H5.333c-1.51-.036-2.769-.556-3.773-1.56S.036 18.858 0 17.347v-7.36c.036-1.511.556-2.765 1.56-3.76 1.004-.996 2.262-1.52 3.773-1.574h.774l-1.174-1.12a1.234 1.234 0 0 1-.373-.906c0-.356.124-.658.373-.907l.027-.027c.267-.249.573-.373.92-.373.347 0 .653.124.92.373L9.653 4.44c.071.071.134.142.187.213h4.267a.836.836 0 0 1 .16-.213l2.853-2.747c.267-.249.573-.373.92-.373.347 0 .662.151.929.4.267.249.391.551.391.907 0 .355-.124.657-.373.906zM5.333 7.24c-.746.018-1.373.276-1.88.773-.506.498-.769 1.13-.786 1.894v7.52c.017.764.28 1.395.786 1.893.507.498 1.134.756 1.88.773h13.334c.746-.017 1.373-.275 1.88-.773.506-.498.769-1.129.786-1.893v-7.52c-.017-.765-.28-1.396-.786-1.894-.507-.497-1.134-.755-1.88-.773zM8 11.107c.373 0 .684.124.933.373.25.249.383.569.4.96v1.173c-.017.391-.15.711-.4.96-.249.25-.56.374-.933.374s-.684-.125-.933-.374c-.25-.249-.383-.569-.4-.96V12.44c.017-.391.15-.711.4-.96.249-.249.56-.373.933-.373zm8 0c.373 0 .684.124.933.373.25.249.383.569.4.96v1.173c-.017.391-.15.711-.4.96-.249.25-.56.374-.933.374s-.684-.125-.933-.374c-.25-.249-.383-.569-.4-.96V12.44c.017-.391.15-.711.4-.96.249-.249.56-.373.933-.373z"/></svg>
+          查看视频教程
+          <span class="arrow">↗</span>
+        </a>
+      </div>
+      <div class="sub">导出你收藏的表情，自动转成微信能直接发的格式</div>
+    </div>
+    <div class="row">
+      <span class="status-pill" id="loginPill">未登录</span>
+      <button class="ghost" id="btnReset" title="清空已下载记录，下次可全量导出">重置记录</button>
+    </div>
+  </header>
+
+  <!-- 步骤指引 -->
+  <div class="card">
+    <div class="guide">
+      <div class="gstep active" id="g1">
+        <div class="gt"><span class="gn">1</span>打开抖音并登录</div>
+        <div class="gd">点下方按钮，会弹出一个<b>抖音窗口</b>。<br>在那个窗口里用手机扫码登录抖音。</div>
+      </div>
+      <div class="gstep" id="g2">
+        <div class="gt"><span class="gn">2</span>打开你的表情面板</div>
+        <div class="gd">
+          在<b>抖音窗口</b>里依次点：<br>
+          「消息」→ 任意私信 → 点输入框旁的 <em>😊</em><br>
+          唤出表情菜单，再点击<b>收藏的表情（❤ 图标）</b>
+        </div>
+      </div>
+      <div class="gstep" id="g3">
+        <div class="gt"><span class="gn">3</span>划到底 → 点开始抓取</div>
+        <div class="gd">
+          在表情面板里把列表 <b>一直划到最底部</b>（把表情都加载出来），<br>
+          然后回到<b>操作窗口</b>点「开始抓取表情」。
+        </div>
+      </div>
+    </div>
+
+    <div class="row" style="margin-top:16px">
+      <button class="primary" id="btnLogin">打开抖音登录</button>
+      <button id="btnScan" disabled>开始抓取表情</button>
+      <span class="hint" id="scanHint"></span>
+    </div>
+  </div>
+
+  <div class="card" style="padding:0">
+    <div class="toolbar">
+      <button class="ghost" id="btnAll">全选</button>
+      <button class="ghost" id="btnNone">取消全选</button>
+      <button class="ghost" id="btnInvert">反选</button>
+      <button class="ghost" id="btnNew" title="只选中还没导出过的表情">仅选新增</button>
+      <span class="spacer"></span>
+      <span class="cnt">已选 <b id="selCnt">0</b> / 共 <b id="totalCnt">0</b></span>
+      <button id="btnDownOne" disabled title="逐张保存为图片文件，不打包">下载图片</button>
+      <button class="primary" id="btnDown" disabled title="打包成 zip 下载">打包下载</button>
+    </div>
+    <div class="bar" id="progWrap" style="display:none;margin:0 16px 12px">
+      <i id="progBar"></i>
+    </div>
+    <div class="grid" id="grid">
+      <div class="empty" style="grid-column:1/-1">
+        <div class="big">🎭</div>
+        <div>还没有抓取到表情<br>请先完成上面三步</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 常见问题 -->
+  <div class="card">
+    <div style="font-weight:600;font-size:14px;margin-bottom:12px">❓ 常见问题</div>
+
+    <details class="faq">
+      <summary>抓取到的表情不全，只有一部分？</summary>
+      <div class="ans">
+        九成是因为<b>表情面板没有滑到最底部</b>。抖音的表情是滚动加载的，没露出来的表情不会被抓取。
+        <b>请先在抖音窗口把表情列表一直往下滑到底，再点「开始抓取」。</b>
+        工具本身也会自动滚动，但前提是面板已经打开并且可以滚动。
+      </div>
+    </details>
+
+    <details class="faq">
+      <summary>有些图片显示"签名已过期"？</summary>
+      <div class="ans">
+        抖音的图片链接是<b>带时效的临时签名</b>，偶尔会来不及缓存就过期。工具会自动重试，
+        一般几秒内就恢复。如果一直不显示，<b>刷新一下本页面</b>即可，或重新抓取一次。
+      </div>
+    </details>
+
+    <details class="faq">
+      <summary>抓取要花多久？</summary>
+      <div class="ans">
+        分两步：① 滚动加载并读取链接（几秒）；② 把原图缓存到本地（大头，已并发优化）。
+        十几张表情通常几秒完成。偶尔慢是网络波动，属正常。
+      </div>
+    </details>
+
+    <details class="faq">
+      <summary>「下载图片」和「打包下载」有什么区别？</summary>
+      <div class="ans">
+        <b>下载图片</b>：逐张保存成单独的图片文件，不打包。选 1 张下 1 张，选 10 张依次下 10 张，
+        适合直接拖进微信发送。<br>
+        <b>打包下载</b>：把选中的全部压成一个 zip，适合一次拿很多张、先存档。
+      </div>
+    </details>
+
+    <details class="faq">
+      <summary>下载多张时浏览器提示"是否允许多个文件下载"？</summary>
+      <div class="ans">
+        逐张下载会连续触发多个下载，浏览器会拦截确认一次，选<b>允许</b>即可。
+        不想被拦截就改用「打包下载」。
+      </div>
+    </details>
+
+    <details class="faq">
+      <summary>登录失效了怎么办？</summary>
+      <div class="ans">
+        右上角状态标签显示「未登录」时就失效了。重新点「打开抖音登录」扫码即可。
+      </div>
+    </details>
+  </div>
+
+  <footer>
+    <div class="author">
+      <span>Made by <b>UUXIAN</b></span>
+      <span class="tip">·</span>
+      <a href="https://space.bilibili.com/30472425" target="_blank" rel="noopener noreferrer" title="在哔哩哔哩查看 UUXIAN 的主页">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17.813 4.653h.854c1.51.054 2.769.578 3.773 1.574 1.004.995 1.524 2.249 1.56 3.76v7.36c-.036 1.51-.556 2.769-1.56 3.773s-2.262 1.524-3.773 1.56H5.333c-1.51-.036-2.769-.556-3.773-1.56S.036 18.858 0 17.347v-7.36c.036-1.511.556-2.765 1.56-3.76 1.004-.996 2.262-1.52 3.773-1.574h.774l-1.174-1.12a1.234 1.234 0 0 1-.373-.906c0-.356.124-.658.373-.907l.027-.027c.267-.249.573-.373.92-.373.347 0 .653.124.92.373L9.653 4.44c.071.071.134.142.187.213h4.267a.836.836 0 0 1 .16-.213l2.853-2.747c.267-.249.573-.373.92-.373.347 0 .662.151.929.4.267.249.391.551.391.907 0 .355-.124.657-.373.906zM5.333 7.24c-.746.018-1.373.276-1.88.773-.506.498-.769 1.13-.786 1.894v7.52c.017.764.28 1.395.786 1.893.507.498 1.134.756 1.88.773h13.334c.746-.017 1.373-.275 1.88-.773.506-.498.769-1.129.786-1.893v-7.52c-.017-.765-.28-1.396-.786-1.894-.507-.497-1.134-.755-1.88-.773zM8 11.107c.373 0 .684.124.933.373.25.249.383.569.4.96v1.173c-.017.391-.15.711-.4.96-.249.25-.56.374-.933.374s-.684-.125-.933-.374c-.25-.249-.383-.569-.4-.96V12.44c.017-.391.15-.711.4-.96.249-.249.56-.373.933-.373zm8 0c.373 0 .684.124.933.373.25.249.383.569.4.96v1.173c-.017.391-.15.711-.4.96-.249.25-.56.374-.933.374s-.684-.125-.933-.374c-.25-.249-.383-.569-.4-.96V12.44c.017-.391.15-.711.4-.96.249-.249.56-.373.933-.373z"/></svg>
+        哔哩哔哩主页
+      </a>
+    </div>
+    <div class="tip">抖音表情包导出工具 · 本地运行，数据不上传</div>
+  </footer>
+</div>
+
+<!-- 登录引导弹窗 -->
+<div class="overlay" id="loginOverlay">
+  <div class="modal" id="loginModal"></div>
+</div>
+
+<div class="toast" id="toast"></div>
+<div class="marquee" id="marquee"></div>
+
+<script>
+const $ = id => document.getElementById(id);
+const state = { items: [], picked: new Set(), scanning: false, busy: false };
+
+function toast(msg, type) {
+  const t = $('toast');
+  t.textContent = msg;
+  t.className = 'toast show' + (type ? ' ' + type : '');
+  clearTimeout(t._timer);
+  t._timer = setTimeout(() => t.className = 'toast', 2800);
+}
+
+async function api(url, opts) {
+  const r = await fetch(url, opts);
+  if (!r.ok) {
+    let m = 'HTTP ' + r.status;
+    try { const j = await r.json(); m = j.detail || m; } catch (e) {}
+    throw new Error(m);
+  }
+  return r;
+}
+
+/* ---------- 状态同步 ---------- */
+async function refreshStatus() {
+  try {
+    const s = await (await api('/api/status')).json();
+    $('loginPill').textContent = s.logged_in ? '已登录' : '未登录';
+    $('loginPill').className = 'status-pill' + (s.logged_in ? ' on' : '');
+    $('btnScan').disabled = !s.logged_in || state.scanning;
+    updateGuide(s.logged_in, s.scan_running || state.scanning);
+  } catch (e) {}
+}
+
+/* ---------- 步骤高亮 ---------- */
+function setSteps(stage) {
+  // stage: 1=待登录 2=已登录待开面板 3=可抓取
+  const g = ['g1', 'g2', 'g3'].map(id => $(id));
+  g.forEach(e => e.classList.remove('active', 'done'));
+  if (stage === 1) {
+    g[0].classList.add('active');
+  } else if (stage === 2) {
+    g[0].classList.add('done');
+    g[1].classList.add('active');
+  } else {
+    g[0].classList.add('done');
+    g[1].classList.add('done');
+    g[2].classList.add('active');
+  }
+}
+
+function updateGuide(loggedIn, scanning) {
+  if (state.items.length) {
+    setSteps(3);
+  } else if (scanning) {
+    setSteps(3);
+  } else if (loggedIn) {
+    setSteps(2);
+  } else {
+    setSteps(1);
+  }
+}
+
+/* ---------- 登录引导弹窗（三步） ---------- */
+const loginOverlay = () => $('loginOverlay');
+const loginModal = () => $('loginModal');
+
+function closeLoginModal() {
+  loginOverlay().classList.remove('show');
+}
+
+function openLoginModal(step) {
+  const m = loginModal();
+  if (step === 1) {
+    m.innerHTML = `
+      <div class="mstep">第 1 步 / 共 3 步</div>
+      <h3>📱 在弹出的「抖音窗口」登录抖音</h3>
+      <div class="mtext">
+        接下来会打开一个独立的浏览器窗口，那就是<b>抖音窗口</b>。<br>
+        请在<b>那个窗口</b>里用手机扫码登录你的抖音账号。
+      </div>
+      <div class="mnote">
+        <b>不用担心：</b>登录状态只保存在你自己电脑上，不会上传到任何服务器。
+      </div>
+      <div class="macts">
+        <button id="mCancel">取消</button>
+        <button class="primary" id="mNext1">了解了</button>
+      </div>`;
+    $('mCancel').onclick = closeLoginModal;
+    $('mNext1').onclick = () => openLoginModal(2);
+
+  } else if (step === 2) {
+    m.innerHTML = `
+      <div class="mstep">第 2 步 / 共 3 步</div>
+      <h3>🤔 在「抖音窗口」登录之后，接着怎么做？</h3>
+      <div class="mtext">选一条你想要的指引方式：</div>
+      <div class="macts col" style="margin-top:14px">
+        <button class="wide" id="mGuide">
+          <b>A 看操作步骤</b><br>
+          点击「消息」→ 选择任意好友私信 → 点输入框旁的 😊 唤出表情菜单，
+          再点击收藏的表情（❤ 图标），并且划到最底部
+        </button>
+        <button class="wide" id="mNailong">B 我是奶龙</button>
+      </div>`;
+    $('mGuide').onclick = () => openLoginModal(3);
+    $('mNailong').onclick = () => {
+      closeLoginModal();
+      toast('奶龙你好 🥰', 'ok');
+      // 不触发唤起抖音窗口
+    };
+
+  } else {
+    m.innerHTML = `
+      <div class="mstep">第 3 步 / 共 3 步</div>
+      <h3>💪 好！很有精神</h3>
+      <div class="mtext">
+        记住刚才的步骤：打开表情面板 → <b>划到最底部</b> → 回来点「开始抓取」。<br>
+        准备好了就点下一步，抖音窗口马上打开。
+      </div>
+      <div class="macts">
+        <button id="mCancel">取消</button>
+        <button class="primary" id="mGo">下一步 →</button>
+      </div>`;
+    $('mCancel').onclick = closeLoginModal;
+    $('mGo').onclick = () => { closeLoginModal(); doRealLogin(); };
+  }
+  loginOverlay().classList.add('show');
+}
+
+/* 点遮罩空白处也能关闭 */
+loginOverlay().onclick = e => { if (e.target === loginOverlay()) closeLoginModal(); };
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') closeLoginModal();
+});
+
+async function doRealLogin() {
+  try {
+    await api('/api/login/start', { method: 'POST' });
+    toast('抖音窗口已打开，请扫码登录', 'ok');
+    pollLogin();
+  } catch (e) { toast('打开失败：' + e.message, 'err'); }
+}
+
+$('btnLogin').onclick = () => openLoginModal(1);
+
+function pollLogin() {
+  const timer = setInterval(async () => {
+    try {
+      const r = await (await api('/api/login/check')).json();
+      if (r.logged_in) {
+        clearInterval(timer);
+        toast('登录成功！', 'ok');
+        await refreshStatus();
+      }
+    } catch (e) {}
+  }, 2000);
+  setTimeout(() => clearInterval(timer), 300000);
+}
+
+/* ---------- 抓取 ---------- */
+$('btnScan').onclick = async () => {
+  state.scanning = true;
+  $('btnScan').disabled = true;
+  $('scanHint').textContent = '正在抓取中...';
+  setSteps(3);
+  try {
+    await api('/api/scan', { method: 'POST' });
+    pollScan();
+  } catch (e) {
+    toast('抓取失败：' + e.message, 'err');
+    state.scanning = false;
+    $('btnScan').disabled = false;
+  }
+};
+
+function pollScan() {
+  const timer = setInterval(async () => {
+    try {
+      const s = await (await api('/api/status')).json();
+      $('scanHint').textContent = s.scan_message || '';
+      if (!s.scan_running) {
+        clearInterval(timer);
+        state.scanning = false;
+        $('btnScan').disabled = false;
+        $('scanHint').textContent = `已抓取 ${s.scanned_count} 个表情`;
+        await loadSession();
+      }
+    } catch (e) {}
+  }, 1200);
+}
+
+/* ---------- 渲染网格 ---------- */
+async function loadSession() {
+  try {
+    const d = await (await api('/api/session')).json();
+    state.items = d.items || [];
+    state.picked.clear();
+    render();
+  } catch (e) { toast('加载列表失败：' + e.message, 'err'); }
+}
+
+function render() {
+  const g = $('grid');
+  if (!state.items.length) {
+    g.innerHTML = `<div class="empty" style="grid-column:1/-1">
+      <div class="big">🎭</div><div>还没有抓取到表情<br>请先完成上面三步</div></div>`;
+    updateCnt();
+    return;
+  }
+  g.innerHTML = state.items.map(it => `
+    <div class="cell${state.picked.has(it.id) ? ' picked' : ''}${it.downloaded ? ' old' : ''}"
+         data-id="${it.id}">
+      <img loading="lazy" src="/api/thumb?url=${encodeURIComponent(it.url)}"
+           data-url="${encodeURIComponent(it.url)}" alt="">
+      <div class="check">✓</div>
+      <div class="tag">已导出</div>
+    </div>`).join('');
+  bindCells();
+  bindThumbRetry();
+  updateCnt();
+  updateGuide(!$('btnLogin').disabled && $('loginPill').classList.contains('on'), false);
+}
+
+/* 缩略图加载失败时自动重试一次（签名过期大多是一次性抖动，重取就好） */
+function bindThumbRetry() {
+  $('grid').querySelectorAll('img[data-url]').forEach(img => {
+    img.onerror = () => {
+      const n = Number(img.dataset.retry || '0');
+      if (n >= 2) return;              // 最多重试 2 次，避免死循环
+      img.dataset.retry = String(n + 1);
+      const bust = '&r=' + Date.now(); // 加时间戳绕过浏览器缓存
+      setTimeout(() => {
+        img.src = '/api/thumb?url=' + img.dataset.url + bust;
+      }, 800 * (n + 1));
+    };
+  });
+}
+
+function updateCnt() {
+  $('selCnt').textContent = state.picked.size;
+  $('totalCnt').textContent = state.items.length;
+  const n = state.picked.size;
+  $('btnDown').disabled = n === 0 || state.busy;
+  // 「下载图片」不打包，逐张存文件；选多张时会一张一张下载
+  $('btnDownOne').disabled = n === 0 || state.busy;
+  $('btnDownOne').title = n > 1
+    ? `逐张保存这 ${n} 张图片（不打包，浏览器会依次下载）`
+    : '把选中的图片直接存为文件，不打包';
+}
+
+/* ---------- 勾选交互：单击 + 拖拽框选 ---------- */
+function bindCells() {
+  const grid = $('grid');
+  const mq = $('marquee');
+
+  grid.onmousedown = e => {
+    if (state.busy) return;
+    const startCell = e.target.closest('.cell');
+
+    // 单击某个格子：切换勾选
+    if (startCell && e.button === 0 && !e.shiftKey) {
+      const id = startCell.dataset.id;
+      if (state.picked.has(id)) state.picked.delete(id);
+      else state.picked.add(id);
+      startCell.classList.toggle('picked');
+      updateCnt();
+      return;
+    }
+
+    // 空白处按下：开始框选
+    if (e.target.closest('.cell') || e.button !== 0) return;
+
+    const rect = grid.getBoundingClientRect();
+    const sx = e.clientX, sy = e.clientY;
+    let moved = false;
+    const base = e.ctrlKey || e.metaKey ? new Set(state.picked) : new Set();
+
+    const onMove = ev => {
+      const dx = Math.abs(ev.clientX - sx), dy = Math.abs(ev.clientY - sy);
+      if (!moved && dx < 5 && dy < 5) return;
+      moved = true;
+      const x1 = Math.min(sx, ev.clientX), y1 = Math.min(sy, ev.clientY);
+      const x2 = Math.max(sx, ev.clientX), y2 = Math.max(sy, ev.clientY);
+      mq.style.display = 'block';
+      mq.style.left = x1 + 'px'; mq.style.top = y1 + 'px';
+      mq.style.width = (x2 - x1) + 'px'; mq.style.height = (y2 - y1) + 'px';
+
+      state.picked = new Set(base);
+      grid.querySelectorAll('.cell').forEach(c => {
+        const r = c.getBoundingClientRect();
+        const hit = !(r.right < x1 || r.left > x2 || r.bottom < y1 || r.top > y2);
+        if (hit) state.picked.add(c.dataset.id);
+        c.classList.toggle('picked', state.picked.has(c.dataset.id));
+      });
+      updateCnt();
+    };
+
+    const onUp = () => {
+      mq.style.display = 'none';
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  };
+}
+
+/* ---------- 批量操作 ---------- */
+const setAll = fn => {
+  state.items.forEach(it => fn(it) ? state.picked.add(it.id) : state.picked.delete(it.id));
+  render();
+};
+$('btnAll').onclick = () => setAll(() => true);
+$('btnNone').onclick = () => { state.picked.clear(); render(); };
+$('btnInvert').onclick = () => setAll(it => !state.picked.has(it.id));
+$('btnNew').onclick = () => setAll(it => !it.downloaded);
+
+/* ---------- 下载 ---------- */
+async function doDownload(mode) {
+  const picked = state.items.filter(it => state.picked.has(it.id));
+  if (!picked.length) return;
+
+  if (mode === 'single' && picked.length > 1) {
+    // 多张逐张下载
+    return downloadEach(picked);
+  }
+
+  state.busy = true;
+  updateCnt();
+  $('progWrap').style.display = 'block';
+  $('progBar').style.width = '0%';
+
+  const timer = setInterval(async () => {
+    try {
+      const p = await (await api('/api/progress')).json();
+      if (p.total) {
+        $('progBar').style.width = Math.round(p.done / p.total * 100) + '%';
+        $('scanHint').textContent = `下载中 ${p.done}/${p.total}`;
+      }
+    } catch (e) {}
+  }, 500);
+
+  try {
+    const resp = await api('/api/download', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ urls: picked.map(it => it.url), mode })
+    });
+
+    const blob = await resp.blob();
+    const ok = resp.headers.get('X-Ok-Count') || '1';
+    const fail = resp.headers.get('X-Fail-Count') || '0';
+
+    // 从响应头拿文件名，拿不到就按模式给默认名
+    let filename;
+    const cd = resp.headers.get('Content-Disposition') || '';
+    const m = cd.match(/filename="?([^"]+)"?/);
+    if (m) {
+      filename = m[1];
+    } else {
+      filename = mode === 'single'
+        ? `emoji_${Date.now()}.png`
+        : `douyin_emoji_${new Date().toISOString().slice(0,10)}.zip`;
+    }
+
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(a.href);
+
+    clearInterval(timer);
+    $('progBar').style.width = '100%';
+    toast(mode === 'single' ? '图片已保存' : `完成！成功 ${ok} 个，失败 ${fail} 个`, 'ok');
+    await loadSession();
+  } catch (e) {
+    clearInterval(timer);
+    toast('下载失败：' + e.message, 'err');
+  } finally {
+    state.busy = false;
+    $('progWrap').style.display = 'none';
+    updateCnt();
+  }
+}
+
+/**
+ * 多张逐张下载：不打包，每张单独存成一个文件。
+ *
+ * 实现要点：
+ * - 一张一张串行发请求，避免浏览器把连续下载当成弹窗拦截
+ * - 每次之间留一点间隔，给浏览器时间处理"另存为"
+ * - 实时更新进度提示
+ * - 任何一张失败不影响其余的，最后汇报结果
+ */
+async function downloadEach(picked) {
+  state.busy = true;
+  updateCnt();
+  $('progWrap').style.display = 'block';
+  $('progBar').style.width = '0%';
+
+  const total = picked.length;
+  let ok = 0, fail = 0;
+
+  for (let i = 0; i < total; i++) {
+    const it = picked[i];
+    $('scanHint').textContent = `逐张下载中 ${i + 1}/${total}`;
+    $('progBar').style.width = Math.round(i / total * 100) + '%';
+
+    try {
+      const resp = await api('/api/download', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ urls: [it.url], mode: 'single' })
+      });
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+
+      const blob = await resp.blob();
+      const cd = resp.headers.get('Content-Disposition') || '';
+      const m = cd.match(/filename="?([^"]+)"?/);
+      const filename = m ? m[1] : `emoji_${Date.now()}_${i}.png`;
+
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = filename;
+      document.body.appendChild(a); a.click(); a.remove();
+      // 稍微延迟回收，避免还没开始下载就被释放
+      setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+      ok++;
+    } catch (e) {
+      fail++;
+    }
+
+    // 给浏览器留出处理"另存为"的时间，避免连续下载被拦截
+    await new Promise(r => setTimeout(r, 350));
+  }
+
+  $('progBar').style.width = '100%';
+  state.busy = false;
+  $('progWrap').style.display = 'none';
+  updateCnt();
+  toast(fail
+    ? `逐张下载完成：成功 ${ok} 个，失败 ${fail} 个`
+    : `已逐张下载 ${ok} 张图片`, fail ? 'err' : 'ok');
+  await loadSession();
+}
+
+$('btnDown').onclick = () => doDownload('zip');
+$('btnDownOne').onclick = () => doDownload('single');
+
+/* ---------- 重置 ---------- */
+$('btnReset').onclick = async () => {
+  if (!confirm('清空「已导出」记录？清空后再抓取会视为全新表情（不影响已下载的文件）。')) return;
+  try {
+    await api('/api/reset-records', { method: 'POST' });
+    toast('记录已清空', 'ok');
+    loadSession();
+  } catch (e) { toast('操作失败', 'err'); }
+};
+
+refreshStatus().then(loadSession);
+setInterval(refreshStatus, 5000);
+</script>
+</body>
+</html>
