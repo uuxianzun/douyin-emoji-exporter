@@ -94,42 +94,49 @@ def banner():
 #       手工补上 pip，再装依赖。全程不影响系统环境，卸载就是删目录。
 
 def _download(url: str, dest: Path, desc: str = "") -> bool:
-    """带进度提示的下载。失败返回 False，不抛异常。"""
+    """
+    带进度提示的下载。失败返回 False，不抛异常。
+
+    先用 requests（超时控制更好），失败后再退回 urllib 重试一次。
+    注意必须**两条独立的路**：requests 可能"能 import 但不可用"
+    （包残缺、被代理拦截等），此时它抛的是运行期异常而不是 ImportError。
+    老写法把 urllib 兜底放在同一个 try 里，requests 一报错就整体放弃了。
+    """
     import urllib.request
 
-    # 尽量用 requests（有更好的超时控制），没有则退回 urllib
+    label = desc or dest.name
+
+    # --- 路线 1：requests ---
     try:
         import requests
-    except ImportError:
-        requests = None
-
-    label = desc or dest.name
-    try:
-        if requests is not None:
-            with requests.get(url, stream=True, timeout=30) as r:
-                r.raise_for_status()
-                total = int(r.headers.get("Content-Length") or 0)
-                done = 0
-                last = 0
-                with open(dest, "wb") as f:
-                    for chunk in r.iter_content(chunk_size=64 * 1024):
-                        if not chunk:
-                            continue
-                        f.write(chunk)
-                        done += len(chunk)
-                        if total:
-                            pct = done * 100 // total
-                            if pct >= last + 5:
-                                last = pct
-                                sys.stdout.write(f"\r      {label}  {pct}%")
-                                sys.stdout.flush()
+        with requests.get(url, stream=True, timeout=30) as r:
+            r.raise_for_status()
+            total = int(r.headers.get("Content-Length") or 0)
+            done = 0
+            last = 0
+            with open(dest, "wb") as f:
+                for chunk in r.iter_content(chunk_size=64 * 1024):
+                    if not chunk:
+                        continue
+                    f.write(chunk)
+                    done += len(chunk)
+                    if total:
+                        pct = done * 100 // total
+                        if pct >= last + 5:
+                            last = pct
+                            sys.stdout.write(f"\r      {label}  {pct}%")
+                            sys.stdout.flush()
+        if dest.exists() and dest.stat().st_size > 0:
             print(f"\r      {label}  完成（{_human(done)}）      ")
             return True
+    except Exception:
+        pass
 
-        # urllib 兜底
+    # --- 路线 2：urllib 兜底 ---
+    try:
         with urllib.request.urlopen(url, timeout=30) as r, open(dest, "wb") as f:
             shutil.copyfileobj(r, f)
-        print(f"      {label}  完成（{_human(dest.stat().st_size)}）")
+        print(f"\r      {label}  完成（{_human(dest.stat().st_size)}）      ")
         return True
     except Exception as e:
         print(f"\r      {label}  下载失败：{e}")
@@ -145,12 +152,36 @@ def _portable_python() -> Path:
     return PORTABLE_DIR / "python.exe"
 
 
+def _same_or_inside(child: Path, parent: Path) -> bool:
+    """child 是否就是 parent，或者位于 parent 内部（都解析成绝对路径再比）"""
+    try:
+        c = child.resolve()
+        p = parent.resolve()
+    except Exception:
+        return False
+    if c == p:
+        return True
+    try:
+        c.relative_to(p)
+        return True
+    except ValueError:
+        return False
+
+
 def find_system_python() -> str | None:
     """
-    在系统里找一个可用的 Python（不需要它已装依赖，只要能跑起来）。
+    在系统里找一个**独立于本项目**的 Python（不需要它已装依赖，只要能跑起来）。
 
     找到就返回解释器路径，找不到返回 None。
     优先用 py 启动器，其次 python / python3。
+
+    【为什么必须排除 .runtime】
+    Windows 的 CreateProcess 搜索顺序是：
+        ① 调用方进程 exe 所在目录 → ② 当前目录 → ③ 系统目录 → ④ PATH
+    run.py 是被 .runtime\\python.exe 启动的，所以执行 "python" 时，系统会先在
+    .runtime\\ 目录里找到**它自己**。如果不排除，这个函数就会把便携运行时
+    误认成"系统 Python"，调用方于是认为"环境已就绪"、跳过 install_portable()
+    ——而 pip 恰恰是在那一步装上的，最终表现为一堆 "No module named pip"。
     """
     candidates = [
         ["py", "-3"],
@@ -163,10 +194,18 @@ def find_system_python() -> str | None:
                 c + ["-c", "import sys; print(sys.executable)"],
                 capture_output=True, text=True, timeout=20,
             )
-            if r.returncode == 0:
-                exe = (r.stdout or "").strip().splitlines()
-                if exe and Path(exe[-1]).exists():
-                    return exe[-1]
+            if r.returncode != 0:
+                continue
+            lines = (r.stdout or "").strip().splitlines()
+            if not lines:
+                continue
+            p = Path(lines[-1])
+            if not p.exists():
+                continue
+            # 便携运行时不属于"系统 Python"，排除掉
+            if _same_or_inside(p, PORTABLE_DIR):
+                continue
+            return str(p)
         except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
             continue
     return None
@@ -194,18 +233,30 @@ def _portable_usable() -> bool:
         return False
 
 
-def portable_ready() -> bool:
-    """便携式运行时是否已经装好（完整 + pip 可用）"""
-    if not _portable_usable():
-        return False
+def _pip_works(py: Path) -> bool:
+    """
+    指定解释器的 pip 是否**真的能跑**。
+
+    不能只看 Lib\\site-packages\\pip 目录在不在——曾出现过 pip 目录残缺的情况
+    （只剩 _internal / _vendor，缺了 __init__.py 和 __main__.py），
+    这时 python -m pip 会直接报 "cannot be directly executed"。
+    所以判据必须是实际执行一次 `-m pip --version`。
+    """
     try:
         r = subprocess.run(
-            [str(_portable_python()), "-m", "pip", "--version"],
+            [str(py), "-m", "pip", "--version"],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=60,
         )
         return r.returncode == 0
     except Exception:
         return False
+
+
+def portable_ready() -> bool:
+    """便携式运行时是否已经装好（完整 + pip 可用）"""
+    if not _portable_usable():
+        return False
+    return _pip_works(_portable_python())
 
 
 def _remove_portable_dir() -> bool:
@@ -241,16 +292,159 @@ def _remove_portable_dir() -> bool:
             return False
 
 
+def _configure_pth() -> bool:
+    """
+    确保 ._pth 启用 site 并包含 Lib\\site-packages。
+
+    embeddable 版默认没有 site，不改就无法用 pip 装的包。
+    官方包自带 python3xx._pth；万一缺失（说明状态异常）就补一个标准的。
+    """
+    pths = list(PORTABLE_DIR.glob("*._pth"))
+    if not pths:
+        ver = "".join(PORTABLE_PY_VERSION.split(".")[:2])   # 3.11.9 -> 311
+        created = PORTABLE_DIR / f"python{ver}._pth"
+        try:
+            created.write_text(
+                f"python{ver}.zip\n.\nimport site\nLib\\site-packages\n",
+                encoding="utf-8",
+            )
+        except Exception as e:
+            print(f"  [错误] 无法创建 ._pth 配置：{e}")
+            return False
+        pths = [created]
+    try:
+        for pth in pths:
+            content = pth.read_text(encoding="utf-8", errors="replace")
+            lines = [ln.rstrip("\r") for ln in content.splitlines()]
+            # 去掉被注释的 import site，统一改成启用的
+            lines = [ln for ln in lines if ln.strip() != "#import site"]
+            if "." not in lines:
+                lines.insert(0, ".")
+            if "import site" not in lines:
+                lines.append("import site")
+            if "Lib\\site-packages" not in lines:
+                lines.append("Lib\\site-packages")
+            pth.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        return True
+    except Exception as e:
+        print(f"  [错误] 配置失败：{e}")
+        return False
+
+
+def _purge_pip_leftovers() -> None:
+    """
+    清掉残缺的 pip 目录，避免 get-pip.py 误判"已安装"而直接跳过。
+    只动 .runtime\\Lib\\site-packages 下的 pip 相关条目，范围很小。
+    """
+    sp = PORTABLE_DIR / "Lib" / "site-packages"
+    if not sp.is_dir():
+        return
+    for pat in ("pip", "pip-*.dist-info", "pip-*.egg-info"):
+        for p in list(sp.glob(pat)):
+            try:
+                if p.is_dir():
+                    shutil.rmtree(p, ignore_errors=True)
+                else:
+                    p.unlink()
+            except Exception:
+                pass
+
+
+def _ensure_pip(py: Path) -> bool:
+    """确保指定解释器有可用的 pip；没有就下载 get-pip.py 引导安装"""
+    if _pip_works(py):
+        print("      pip 已就绪")
+        return True
+
+    # 残缺的 pip 会让 get-pip.py 以为"装过了"，先清掉
+    _purge_pip_leftovers()
+
+    print("      正在安装包管理器 pip...")
+    getpip = PORTABLE_DIR / "get-pip.py"
+    got = False
+    for name, url in GETPIP_URLS:
+        if _download(url, getpip, desc="get-pip.py"):
+            got = True
+            break
+    if not got:
+        print("  [错误] pip 引导脚本下载失败。")
+        return False
+
+    def _cleanup_script():
+        try:
+            getpip.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+    # 依次尝试各镜像源；装完再实测一次，确认真的能用
+    for name, mirror in PIP_MIRRORS:
+        print(f"      尝试镜像源：{name} ...")
+        try:
+            subprocess.check_call(
+                [str(py), str(getpip), "-i", mirror,
+                 "--trusted-host", mirror.split("/")[2],
+                 "--no-warn-script-location"],
+                stdout=subprocess.DEVNULL,
+            )
+        except subprocess.CalledProcessError:
+            print(f"      {name} 不可用，换下一个...")
+            continue
+        if _pip_works(py):
+            _cleanup_script()
+            print("      pip 安装完成")
+            return True
+        print(f"      {name} 装完 pip 仍不可用，换下一个...")
+
+    # 全部镜像失败，回退官方源
+    print("      镜像源均不可用，尝试官方源...")
+    try:
+        subprocess.check_call(
+            [str(py), str(getpip), "--no-warn-script-location"],
+            stdout=subprocess.DEVNULL,
+        )
+    except subprocess.CalledProcessError:
+        pass
+    if _pip_works(py):
+        _cleanup_script()
+        print("      pip 安装完成（官方源）")
+        return True
+
+    print("  [错误] pip 安装失败，请检查网络后重试。")
+    return False
+
+
+def _mark_runtime_for_reinstall() -> None:
+    """
+    留一个标记，让**下次 start.bat 启动时**先删掉 .runtime 再重新下载。
+
+    为什么不在这里直接删或改名：
+      - 删除：本进程正跑在 .runtime 里，Windows 不允许删掉正在使用的文件；
+      - 改名：虽然目录"能改名"，但当前解释器的 sys.path 里记的还是旧路径，
+              改名后它连自己的标准库（python311.zip）都找不到，后续 import 直接崩。
+    start.bat 是在启动 Python **之前**执行 rmdir 的，那时没有任何文件占用，
+    而且它本来就有"看到标记就删掉重装"的分支，正好复用。
+    """
+    try:
+        PORTABLE_DIR.mkdir(parents=True, exist_ok=True)
+        (PORTABLE_DIR / ".cleanup-pending").write_text("1", encoding="utf-8")
+    except Exception:
+        pass
+
+
 def install_portable() -> bool:
     """
-    安装便携式 Python 运行时。
+    安装（或**就地修复**）便携式 Python 运行时。
 
-    步骤（都已实测可行）：
-      1. 下载官方 embeddable zip（约 11MB）
+    步骤：
+      1. 下载官方 embeddable zip（约 11MB）—— 仅当解释器不可用时
       2. 解压到 .runtime
-      3. 修改 ._pth：追加 Lib\\site-packages 和 import site
-         （embeddable 版默认没有 site，不改就无法用 pip 装的包）
+      3. 配置 ._pth：追加 Lib\\site-packages 和 import site
       4. 下载 get-pip.py 引导 pip
+
+    【为什么不整体删掉重来】
+    本脚本很可能正跑在 .runtime\\python.exe 里，Windows 不允许删除正在被使用的
+    文件，"自己删自己"必然失败，还会留下删了一半的残缺目录（更难处理）。
+    所以只要 python.exe 本身还能用，就**原地震补** pip，一个文件都不删。
     """
     print()
     print("  正在准备运行环境（首次使用需要一点时间）")
@@ -261,9 +455,26 @@ def install_portable() -> bool:
         print("  便携式运行环境已就绪")
         return True
 
-    # 清理可能残留的半成品。
-    # 注意：如果残留目录里有文件被占用（比如那个 python.exe 正在运行），
-    # 这里是删不掉的，必须如实告知，否则解压会覆盖失败、报错更难懂。
+    py = _portable_python()
+
+    # --- A. 解释器本身可用，只是缺 pip（或 pip 坏了）→ 原地震补 ---
+    if py.exists() and _portable_usable():
+        print("  检测到运行环境缺少 pip（或 pip 已损坏），正在原地修复...")
+        if _configure_pth() and _ensure_pip(py):
+            print()
+            print("  运行环境修复完成。")
+            print()
+            return True
+
+        # 原地修不好 → 留标记，让下次 start.bat 删掉重装（那时没有文件占用，最稳）
+        _mark_runtime_for_reinstall()
+        print()
+        print("  [错误] 运行环境修复失败，已安排下次启动时自动重装。")
+        print("         请关闭本窗口，然后重新双击 start.bat 即可。")
+        print()
+        return False
+
+    # --- B. 解释器不可用（缺失 / 标准库残缺）→ 只能清理后重装 ---
     if PORTABLE_DIR.exists():
         print("  检测到上次留下的运行环境，正在清理...")
         if not _remove_portable_dir():
@@ -313,50 +524,13 @@ def install_portable() -> bool:
 
     # --- 3. 修 ._pth（关键一步）---
     print("  [3/4] 配置运行环境...")
-    pths = list(PORTABLE_DIR.glob("*._pth"))
-    if not pths:
-        print("  [错误] 找不到 ._pth 配置文件。")
+    if not _configure_pth():
         return False
-    try:
-        for pth in pths:
-            content = pth.read_text(encoding="utf-8", errors="replace")
-            lines = [ln.rstrip("\r") for ln in content.splitlines()]
-            # 去掉被注释的 import site，统一改成启用的
-            lines = [ln for ln in lines if ln.strip() != "#import site"]
-            if "import site" not in lines:
-                lines.append("import site")
-            if "Lib\\site-packages" not in lines:
-                lines.append("Lib\\site-packages")
-            pth.write_text("\n".join(lines) + "\n", encoding="utf-8")
-        print("      完成")
-    except Exception as e:
-        print(f"  [错误] 配置失败：{e}")
-        return False
+    print("      完成")
 
     # --- 4. 引导 pip ---
     print("  [4/4] 安装包管理器 pip...")
-    getpip = PORTABLE_DIR / "get-pip.py"
-    got = False
-    for name, url in GETPIP_URLS:
-        if _download(url, getpip, desc="get-pip.py"):
-            got = True
-            break
-    if not got:
-        print("  [错误] pip 引导脚本下载失败。")
-        return False
-
-    mirror = PIP_MIRRORS[1][1]  # 阿里云（实测最稳）
-    try:
-        subprocess.check_call(
-            [str(py), str(getpip), "-i", mirror,
-             "--trusted-host", mirror.split("/")[2],
-             "--no-warn-script-location"],
-            stdout=subprocess.DEVNULL,
-        )
-        getpip.unlink(missing_ok=True)
-        print("      pip 安装完成")
-    except subprocess.CalledProcessError:
-        print("  [错误] pip 安装失败，请检查网络后重试。")
+    if not _ensure_pip(py):
         return False
 
     print()
@@ -1035,58 +1209,54 @@ def run_server() -> int:
     return 0
 
 
+def _running_from_portable() -> bool:
+    """当前进程是不是正跑在 .runtime 里（不判断好坏，只看位置）"""
+    try:
+        return Path(sys.executable).resolve().parent == PORTABLE_DIR.resolve()
+    except Exception:
+        return False
+
+
 def _running_from_broken_runtime() -> bool:
     """
-    检测"是不是正跑在一个残缺的 .runtime 里"。
+    检测"是不是正跑在一个**残缺到无法自救**的 .runtime 里"。
 
     背景：如果 .runtime 删除到一半（例如清理时文件被占用），会留下
     python.exe 还在、但 python311.zip（标准库）没了的残缺目录。
     这种解释器连 import 都会失败，必须尽早切走。
+
+    注意：这里**只**看标准库完整性，故意不含 pip。
+    "标准库完整但缺 pip"完全是可自愈的（见 install_portable 的原地修复分支），
+    不必也不该走"换解释器重启"这条路——那会白白跳过启动菜单。
     """
-    try:
-        exe = Path(sys.executable).resolve()
-        if exe.parent != PORTABLE_DIR.resolve():
-            return False
-    except Exception:
-        return False
-    # 已在 .runtime 里，检查标准库是否完整
-    return not _portable_usable()
+    return _running_from_portable() and not _portable_usable()
 
 
 def _escape_broken_runtime() -> int | None:
     """
-    如果当前正跑在残缺的 .runtime 里，就换一个健康的解释器重启自己。
+    如果当前正跑在残缺的 .runtime 里，就换一个可用解释器重启自己。
 
     返回 None 表示无需处理（当前解释器正常），否则返回退出码。
+
+    【注意】这里刻意**不再**先删除 .runtime。
+    本进程正跑在里面，删不掉；而且"删了一半"只会制造出更难处理的残缺目录。
+    install_portable() 现在支持原地重装，直接交给它就好。
     """
     if not _running_from_broken_runtime():
         return None
 
     print()
-    print("  检测到运行环境不完整（上次清理可能没删干净），正在修复...")
+    print("  检测到运行环境不完整，正在修复...")
     print()
 
-    # 1. 先找一个健康的解释器：优先系统 Python
+    # 优先借用系统里已有的 Python，最省事
     healthy = find_system_python()
-
-    # 2. 系统没有的话，尝试修好便携运行时：
-    #    先删掉这个残缺目录（此刻它正被自己占用，多半删不掉），
-    #    所以更靠谱的做法是提示用户，或者借助系统 Python 来修。
     if healthy:
         print("  已找到可用的 Python，正在切换...")
         print()
         return _reexec(healthy)
 
-    # 系统里也没有 Python，只能尝试清理残缺目录再装
-    print("  未找到可用的 Python，将重新下载运行环境。")
-    print()
-    if not _remove_portable_dir():
-        print("  [错误] 旧的运行环境无法删除（有文件被占用）。")
-        print("         请关闭所有本工具窗口后，重新运行 start.bat。")
-        print(f"         或手动删除这个文件夹：{PORTABLE_DIR}")
-        print()
-        safe_input("按回车键退出...")
-        return 1
+    # 系统里也没有，就地重装便携运行时（它会自己处理残缺目录）
     if not install_portable():
         print()
         safe_input("按回车键退出...")
@@ -1112,8 +1282,10 @@ def main():
 
     banner()
 
-    # 上次彻底清理如果没删干净（留了标记），这里补一刀
-    if _has_pending_cleanup() and not _running_from_broken_runtime():
+    # 上次彻底清理如果没删干净（留了标记），这里补一刀。
+    # 但绝不能删"自己正跑在里面的"那个 .runtime —— Windows 删不掉正在使用的
+    # 文件，硬删只会留下"删了一半"的残缺目录，反而更难处理。
+    if _has_pending_cleanup() and not _running_from_portable():
         if _remove_portable_dir():
             print("  已清理上次残留的运行环境。")
             print()
